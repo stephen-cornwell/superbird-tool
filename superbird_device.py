@@ -437,69 +437,100 @@ class SuperbirdDevice:
                 print(traceback.format_exc())
                 sys.exit(1)
 
+    def calculate_chunk_size(self):
+        """ calculate the chunk size to use for read/write operations
+            chunk size must be a multiple of the device block size
+        """
+        chunk_size = max(self.WRITE_CHUNK_SIZE, self.DEVICE_BLOCK_SIZE)
+        if chunk_size % self.DEVICE_BLOCK_SIZE != 0:
+            chunk_size = (chunk_size // self.DEVICE_BLOCK_SIZE) * self.DEVICE_BLOCK_SIZE
+
+        return chunk_size
+    
+    def restore_bootloader(self, infile:str):
+        # Bootloader is 2MB but often padded to 4MB in dumps. Just grab the first 2MB.
+        part_name = 'bootloader'
+        file_size = 2 * 1024 * 1024
+
+        with open(infile, 'rb') as ifl:
+            data = ifl.read(file_size)
+
+            self.print(f'writing partition: "{part_name}" from file: {infile} in one chunk')
+            self.print(f'chunk_size: {file_size / 1024}KB')
+
+            self.device.writeLargeMemory(self.ADDR_TMP, data, self.TRANSFER_BLOCK_SIZE, appendZeros=True)
+
+            # bootloader always causes timeout
+            self.bulkcmd(f'amlmmc write {part_name} {hex(self.ADDR_TMP)} {hex(0)} {hex(file_size)}', silent=True, ignore_timeout=True)
+            time.sleep(2)  # let bootloader settle
+
+
     def restore_partition(self, part_name:str, infile:str):
         """ Restore given partition from given dump
             Like with dump_partition, we first have to read it into RAM, then instruct the device to write it to mmc, one chunk at a time
         """
         self.bulkcmd('amlmmc part 1', silent=True)
         (part_size, part_offset) = self.validate_partition_size(part_name)
+
+        if part_name == 'bootloader':
+            raise ValueError('Bootloader should be restored using restore_bootloader')
+
         if part_size is None:
             raise ValueError('Failed to validate partition size!')
-        else:
-            try:
-                chunk_size = self.WRITE_CHUNK_SIZE
-                file_size = os.path.getsize(infile)
-                if part_name == 'bootloader':
-                    # bootloader is only 2MB, but dumps are often zero-padded to 4MB
-                    part_size = 2 * 1024 * 1024
-                    file_size = part_size
-                if file_size > part_size:
-                    raise ValueError(f'File is larger than target partition: {file_size} vs {part_size}')
-                if file_size <= self.TRANSFER_SIZE_THRESHOLD:
-                    # 2MB and lower, send as one chunk
-                    chunk_size = file_size
-                with open(infile, 'rb') as ifl:
-                    # now we are ready to actually write to the partition
-                    offset = 0
-                    first_chunk = True
-                    last_chunk = False
-                    remaining = part_size
-                    start_time = time.time()
-                    # TODO right now get_status always fails, it does not seem to be tracking our write progress
-                    # self.device.bulkCmd(f'download store {part_name} normal {hex(part_size)}')
-                    while remaining:
-                        if first_chunk:
-                            first_chunk = False
-                        else:
-                            stdout_clear_lines(2)
-                        if remaining <= chunk_size:
-                            chunk_size = remaining
-                            last_chunk = True
-                        progress = round((offset / part_size) * 100)
-                        elapsed = time.time() - start_time
-                        if elapsed < 1:
-                            # on a quick enough system, elapsed can be zero, and cause divbyzero error when calculating speed
-                            speed = 0
-                        else:
-                            speed = round((offset / elapsed) / 1024 / 1024, 2)  # in MB/s
-                        data = ifl.read(chunk_size)
-                        remaining -= chunk_size
-                        self.print(f'writing partition: "{part_name}" {hex(part_offset)}+{hex(offset)} from file: {infile}')
-                        self.print(f'chunk_size: {chunk_size / 1024}KB | speed: {speed}MB/s | progress: {progress}% | remaining: {round(remaining / 1024 / 1024)}MB / {round(part_size / 1024 / 1024)}MB')
-                        self.device.writeLargeMemory(self.ADDR_TMP, data, self.TRANSFER_BLOCK_SIZE, appendZeros=True)
-                        if part_name == 'bootloader':
-                            # bootloader always causes timeout
-                            self.bulkcmd(f'amlmmc write {part_name} {hex(self.ADDR_TMP)} {hex(offset)} {hex(chunk_size)}', silent=True, ignore_timeout=True)
-                            time.sleep(2)  # let bootloader settle
-                        else:
-                            self.bulkcmd(f'amlmmc write {part_name} {hex(self.ADDR_TMP)} {hex(offset)} {hex(chunk_size)}', silent=True)
-                        offset += chunk_size
-                        if last_chunk:
-                            break
-                    # self.bulkcmd('download get_status', silent=False)  #  get_status always fails
-            except Exception as ex:
-                # in the event of any failure while writing partitions,
-                #   force the entire script to exit to prevent further possible damage
-                print(f'Error while restoring partition {part_name}, {ex}')
-                print(traceback.format_exc())
-                sys.exit(1)
+        
+        try:
+            file_size = os.path.getsize(infile)
+            chunk_size = self.calculate_chunk_size()
+
+            if file_size > part_size:
+                raise ValueError(f'File is larger than target partition: {file_size} vs {part_size}')
+
+            # # I'm presuming this ensures the bootloader is written in one chunk?
+            # if file_size <= self.TRANSFER_SIZE_THRESHOLD:
+            #     # 2MB and lower, send as one chunk
+            #     chunk_size = file_size
+            
+            with open(infile, 'rb') as ifl:
+                # now we are ready to actually write to the partition
+                offset = 0
+                remaining = part_size
+                start_time = time.time()
+
+                # TODO right now get_status always fails, it does not seem to be tracking our write progress
+                # self.device.bulkCmd(f'download store {part_name} normal {hex(part_size)}')
+                while (data := ifl.read(chunk_size)):
+
+                    read_size = len(data)
+
+                    # Clear output after first chunk.
+                    if (offset > 0): stdout_clear_lines(2)
+
+                    # Pad data to chunk size to avoid misalignment. 
+                    if len(data) < chunk_size:
+                        data = data.ljust(chunk_size, b'\x00')  # Zero-padding
+                    
+                    # Calculate and output progress.
+                    progress = round((offset / part_size) * 100)
+                    elapsed = time.time() - start_time
+                    speed = 0 if elapsed < 1 else round((offset / elapsed) / 1024 / 1024, 2)  # in MB/s
+                    remaining -= read_size
+                    
+                    self.print(f'writing partition: "{part_name}" {hex(part_offset)}+{hex(offset)} from file: {infile}')
+                    self.print(f'chunk_size: {chunk_size / 1024}KB | speed: {speed}MB/s | progress: {progress}% | remaining: {round(remaining / 1024 / 1024)}MB / {round(part_size / 1024 / 1024)}MB')
+
+                    # Read data into memory.                        
+                    self.device.writeLargeMemory(self.ADDR_TMP, data, self.TRANSFER_BLOCK_SIZE, appendZeros=True)
+
+                    # Write data to partition.
+                    self.bulkcmd(f'amlmmc write {part_name} {hex(self.ADDR_TMP)} {hex(offset)} {hex(chunk_size)}', silent=True)
+                    
+                    offset += read_size
+
+                # self.bulkcmd('download get_status', silent=False)  #  get_status always fails
+
+        except Exception as ex:
+            # in the event of any failure while writing partitions,
+            #   force the entire script to exit to prevent further possible damage
+            print(f'Error while restoring partition {part_name}, {ex}')
+            print(traceback.format_exc())
+            sys.exit(1)
