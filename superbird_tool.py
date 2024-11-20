@@ -62,6 +62,25 @@ def rename_parts(folderpath):
         except:
             continue
 
+# Restore partitions from dump files and rename them to *.restored
+# This allows multiple runs (when you have failures) without having to repeatedly restore successfully restored partitions.
+def restore_partition_if_exists(dev:SuperbirdDevice, partition_name:str, input_file:str):
+    if not os.path.isfile(input_file):
+        print(f'File "{input_file}" does not exist. Skipping...')
+        return
+    
+    # Restore partition and rename file. 
+    # Expectation here is restore_partition will terminate execution if it fails.
+    dev.restore_partition(partition_name, input_file)
+    os.rename(input_file, f'{input_file}.restored')
+
+# Reset restored image file names to original names.
+def reset_restored_files(image_folder):
+    for file in os.listdir(image_folder):
+        if file.endswith(".restored"):
+            os.rename(f'{image_folder}/{file}', f'{image_folder}/{file[:-9]}')
+    
+
 if __name__ == '__main__':
     print(f'Spotify Car Thing (superbird) toolkit, v{VERSION}, by Thing Labs and Bishop Dynamics')
     print('     https://github.com/thinglabsoss/superbird-tool   ')
@@ -138,6 +157,7 @@ Advanced:
     argument_parser.add_argument('--restore_device', action='store', type=str, nargs=1, metavar=('INPUT_FOLDER'), help='Restore all partitions from a folder')
     argument_parser.add_argument('--dont_reset', action='store_true', help='Don\'t factory reset when restoring device. This option does nothing on its own')
     argument_parser.add_argument('--slow_burn', action='store_true', help='Use a slower burning speed. Use this if restoring crashes mid-flash.')
+    argument_parser.add_argument('--continue_restore', action='store_true', help='Continue a previous restore, skipping successfully restored partitions.')
     argument_parser.add_argument('--slower_burn', action='store_true', help='Use an even slower burning speed. Use this if --slow_burn doesn\'t work.')
     argument_parser.add_argument('--dump_partition', action='store', type=str, nargs=2, metavar=('PARTITION_NAME', 'OUTPUT_FILE'), help='Dump a partition to a file')
     argument_parser.add_argument('--restore_partition', action='store', type=str, nargs=2, metavar=('PARTITION_NAME', 'INPUT_FILE'), help='Restore a partition from a dump file')
@@ -338,14 +358,21 @@ Advanced:
             FOLDER_NAME = args.restore_device[0]
             rename_parts(FOLDER_NAME)
             print(f'restoring entire device from dumpfiles in {FOLDER_NAME}')
-            FILE_LIST = [
-                'fip_a.dump', 'fip_b.dump', 'logo.dump', 'dtbo_a.dump', 'dtbo_b.dump', 'vbmeta_a.dump',
-                'vbmeta_b.dump', 'boot_a.dump', 'boot_b.dump', 'misc.dump', 'system_a.ext2', 'system_b.ext2',
-            ]
-            for part_name in FILE_LIST:
-                if not os.path.isfile(f'{FOLDER_NAME}/{part_name}'):
-                    print(f'Error: missing expected dump file: {FOLDER_NAME}/{part_name}')
-                    sys.exit(1)
+
+            # If we're doing a full restore then make sure all the dump files are there. 
+            if not args.continue_restore:
+                # Reset restored image file names to original names.
+                reset_restored_files(FOLDER_NAME)
+
+                FILE_LIST = [
+                    'fip_a.dump', 'fip_b.dump', 'logo.dump', 'dtbo_a.dump', 'dtbo_b.dump', 'vbmeta_a.dump',
+                    'vbmeta_b.dump', 'boot_a.dump', 'boot_b.dump', 'misc.dump', 'system_a.ext2', 'system_b.ext2',
+                ]
+                for part_name in FILE_LIST:
+                    if not os.path.isfile(f'{FOLDER_NAME}/{part_name}'):
+                        print(f'Error: missing expected dump file: {FOLDER_NAME}/{part_name}')
+                        sys.exit(1)
+
             # we use the .txt instead of .dump because sometimes the partition size does not line up perfectly
             #   also probably the safer way to interact with env partition
             #   if txt version does not exist, we create it for you
@@ -356,18 +383,20 @@ Advanced:
                 convert_env_dump(f'{FOLDER_NAME}/env.dump', f'{FOLDER_NAME}/env.txt')
             dev.send_env_file(f'{FOLDER_NAME}/env.txt')
             dev.bulkcmd('env save')
-            dev.restore_partition('fip_a', f'{FOLDER_NAME}/fip_a.dump')
-            dev.restore_partition('fip_b', f'{FOLDER_NAME}/fip_b.dump')
-            dev.restore_partition('logo', f'{FOLDER_NAME}/logo.dump')
-            dev.restore_partition('dtbo_a', f'{FOLDER_NAME}/dtbo_a.dump')
-            dev.restore_partition('dtbo_b', f'{FOLDER_NAME}/dtbo_b.dump')
-            dev.restore_partition('vbmeta_a', f'{FOLDER_NAME}/vbmeta_a.dump')
-            dev.restore_partition('vbmeta_b', f'{FOLDER_NAME}/vbmeta_b.dump')
-            dev.restore_partition('boot_a', f'{FOLDER_NAME}/boot_a.dump')
-            dev.restore_partition('boot_b', f'{FOLDER_NAME}/boot_b.dump')
-            dev.restore_partition('misc', f'{FOLDER_NAME}/misc.dump')
-            dev.restore_partition('system_a', f'{FOLDER_NAME}/system_a.ext2')
-            dev.restore_partition('system_b', f'{FOLDER_NAME}/system_b.ext2')
+
+            restore_partition_if_exists(dev, 'fip_a', f'{FOLDER_NAME}/fip_a.dump')
+            restore_partition_if_exists(dev, 'fip_b', f'{FOLDER_NAME}/fip_b.dump')
+            restore_partition_if_exists(dev, 'logo', f'{FOLDER_NAME}/logo.dump')
+            restore_partition_if_exists(dev, 'dtbo_a', f'{FOLDER_NAME}/dtbo_a.dump')
+            restore_partition_if_exists(dev, 'dtbo_b', f'{FOLDER_NAME}/dtbo_b.dump')
+            restore_partition_if_exists(dev, 'vbmeta_a', f'{FOLDER_NAME}/vbmeta_a.dump')
+            restore_partition_if_exists(dev, 'vbmeta_b', f'{FOLDER_NAME}/vbmeta_b.dump')
+            restore_partition_if_exists(dev, 'boot_a', f'{FOLDER_NAME}/boot_a.dump')
+            restore_partition_if_exists(dev, 'boot_b', f'{FOLDER_NAME}/boot_b.dump')
+            restore_partition_if_exists(dev, 'misc', f'{FOLDER_NAME}/misc.dump')
+            restore_partition_if_exists(dev, 'system_a', f'{FOLDER_NAME}/system_a.ext2')
+            restore_partition_if_exists(dev, 'system_b', f'{FOLDER_NAME}/system_b.ext2')
+
             # handle data and settings partitions last
             if not os.path.exists(f'{FOLDER_NAME}/data.ext4'):
                 print(f'did not find {FOLDER_NAME}/data.ext4, factory resetting instead')
