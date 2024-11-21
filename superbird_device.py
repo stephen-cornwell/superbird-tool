@@ -10,6 +10,10 @@ import time
 import traceback
 import platform
 
+from pathlib import Path
+
+IMAGES_PATH = Path(os.path.dirname(__file__)).joinpath('images')
+
 try:
     from pyamlboot import pyamlboot
     from usb.core import USBTimeoutError, USBError
@@ -77,7 +81,7 @@ def find_device(silent:bool=False):
             dev_product = found_devices[0].device.product
             # I don't understand it, just documenting it and fixing the bug.
             # --burn_mode somehow has dev_product set to M8-CHIP, --find_device has dev_product be None
-            if dev_product is None or dev_product == "M8-CHIP": 
+            if dev_product is None or dev_product == "M8-CHIP":
                 if not silent:
                     print('Found device booted in USB Burn Mode (ready for commands)')
                 return 'usb-burn'
@@ -108,7 +112,7 @@ def check_device_mode(mode:str, silent:bool=False):
             if not silent:
                 print('     need to boot up normally first')
         if platform.system() == "Windows":
-                print("Make sure you've installed the correct driver using Zadig.")
+            print("Make sure you've installed the correct driver using Zadig.")
         return False
     return True
 
@@ -121,7 +125,7 @@ def enter_burn_mode(dev):
         return dev
     elif dev_mode == 'usb':
         print('Entering USB Burn Mode')
-        dev.bl2_boot('images/superbird.bl2.encrypted.bin', 'images/superbird.bootloader.img')
+        dev.bl2_boot(str(IMAGES_PATH.joinpath('superbird.bl2.encrypted.bin')), str(IMAGES_PATH.joinpath('superbird.bootloader.img')))
         print('Waiting for device...')
         # wait for it to boot up in USB Burn Mode
         wait_time = 0
@@ -441,12 +445,14 @@ class SuperbirdDevice:
         """ calculate the chunk size to use for read/write operations
             chunk size must be a multiple of the device block size
         """
-        chunk_size = max(self.WRITE_CHUNK_SIZE, self.DEVICE_BLOCK_SIZE)
-        if chunk_size % self.DEVICE_BLOCK_SIZE != 0:
-            chunk_size = (chunk_size // self.DEVICE_BLOCK_SIZE) * self.DEVICE_BLOCK_SIZE
+        # chunk_size = max(self.WRITE_CHUNK_SIZE, self.)
+        # if chunk_size % self.DEVICE_BLOCK_SIZE != 0:
+        #     chunk_size = (chunk_size // self.DEVICE_BLOCK_SIZE) * self.DEVICE_BLOCK_SIZE
+
+        chunk_size = self.WRITE_CHUNK_SIZE
 
         return chunk_size
-    
+
     def restore_bootloader(self, infile:str):
         # Bootloader is 2MB but often padded to 4MB in dumps. Just grab the first 2MB.
         part_name = 'bootloader'
@@ -477,7 +483,7 @@ class SuperbirdDevice:
 
         if part_size is None:
             raise ValueError('Failed to validate partition size!')
-        
+
         try:
             file_size = os.path.getsize(infile)
             chunk_size = self.calculate_chunk_size()
@@ -489,7 +495,7 @@ class SuperbirdDevice:
             # if file_size <= self.TRANSFER_SIZE_THRESHOLD:
             #     # 2MB and lower, send as one chunk
             #     chunk_size = file_size
-            
+
             with open(infile, 'rb') as ifl:
                 # now we are ready to actually write to the partition
                 offset = 0
@@ -498,32 +504,32 @@ class SuperbirdDevice:
 
                 # TODO right now get_status always fails, it does not seem to be tracking our write progress
                 # self.device.bulkCmd(f'download store {part_name} normal {hex(part_size)}')
-                while (data := ifl.read(chunk_size)):
+                while data := ifl.read(chunk_size):
 
                     read_size = len(data)
 
                     # Clear output after first chunk.
-                    if (offset > 0): stdout_clear_lines(2)
+                    #if offset > 0: stdout_clear_lines(4)
 
                     # Pad data to chunk size to avoid misalignment. 
                     if len(data) < chunk_size:
                         data = data.ljust(chunk_size, b'\x00')  # Zero-padding
-                    
+
                     # Calculate and output progress.
                     progress = round((offset / part_size) * 100)
                     elapsed = time.time() - start_time
                     speed = 0 if elapsed < 1 else round((offset / elapsed) / 1024 / 1024, 2)  # in MB/s
                     remaining -= read_size
-                    
+
                     self.print(f'writing partition: "{part_name}" {hex(part_offset)}+{hex(offset)} from file: {infile}')
-                    self.print(f'chunk_size: {chunk_size / 1024}KB | speed: {speed}MB/s | progress: {progress}% | remaining: {round(remaining / 1024 / 1024)}MB / {round(part_size / 1024 / 1024)}MB')
+                    #self.print(f'chunk_size: {chunk_size / 1024}KB | speed: {speed}MB/s | progress: {progress}% | remaining: {round(remaining / 1024 / 1024)}MB / {round(part_size / 1024 / 1024)}MB')
 
                     # Read data into memory.                        
                     self.device.writeLargeMemory(self.ADDR_TMP, data, self.TRANSFER_BLOCK_SIZE, appendZeros=True)
 
                     # Write data to partition.
-                    self.bulkcmd(f'amlmmc write {part_name} {hex(self.ADDR_TMP)} {hex(offset)} {hex(chunk_size)}', silent=True)
-                    
+                    write_result = self.bulkcmd(f'amlmmc write {part_name} {hex(self.ADDR_TMP)} {hex(offset)} {hex(chunk_size)}', silent=True)
+
                     offset += read_size
 
                 # self.bulkcmd('download get_status', silent=False)  #  get_status always fails
@@ -534,3 +540,15 @@ class SuperbirdDevice:
             print(f'Error while restoring partition {part_name}, {ex}')
             print(traceback.format_exc())
             sys.exit(1)
+
+    def trywritechunk(self, part_name:str, offset:int, chunk_size:int, retries:int):
+        tries = 0;
+        while tries < retries:
+            try:
+                # attempt
+                self.bulkcmd(f'amlmmc write {part_name} {hex(self.ADDR_TMP)} {hex(offset)} {hex(chunk_size)}', silent=True)
+                return True
+            except Exception as ex:
+                print(f'Error while trywriting partition {part_name}, {ex}')
+                tries += 1
+                if tries >= retries: return False

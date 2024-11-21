@@ -64,9 +64,12 @@ def rename_parts(folderpath):
 
 # Restore partitions from dump files and rename them to *.restored
 # This allows multiple runs (when you have failures) without having to repeatedly restore successfully restored partitions.
-def restore_partition_if_exists(dev:SuperbirdDevice, partition_name:str, input_file:str):
+def restore_partition(dev:SuperbirdDevice, partition_name:str, input_file:str):
     if not os.path.isfile(input_file):
-        print(f'File "{input_file}" does not exist. Skipping...')
+        if os.path.isfile(f'{input_file}.restored'):
+            print(f"{partition_name} already restored. Skipping...")
+        else:
+            print(f'File "{input_file}" does not exist. Skipping...')
         return
     
     # Restore partition and rename file. 
@@ -82,7 +85,7 @@ def reset_restored_files(image_folder):
     
 
 if __name__ == '__main__':
-    print(f'Spotify Car Thing (superbird) toolkit, v{VERSION}, by Thing Labs and Bishop Dynamics')
+    print(f'Spotify Car Thing (superbird) toolkit, v{VERSION}, by Thing Labs and Bishop Dynamics and Stephen Cornwell')
     print('     https://github.com/thinglabsoss/superbird-tool   ')
     print('     Forked from https://github.com/bishopdynamics/superbird-tool')
     print('')
@@ -384,18 +387,18 @@ Advanced:
             dev.send_env_file(f'{FOLDER_NAME}/env.txt')
             dev.bulkcmd('env save')
 
-            restore_partition_if_exists(dev, 'fip_a', f'{FOLDER_NAME}/fip_a.dump')
-            restore_partition_if_exists(dev, 'fip_b', f'{FOLDER_NAME}/fip_b.dump')
-            restore_partition_if_exists(dev, 'logo', f'{FOLDER_NAME}/logo.dump')
-            restore_partition_if_exists(dev, 'dtbo_a', f'{FOLDER_NAME}/dtbo_a.dump')
-            restore_partition_if_exists(dev, 'dtbo_b', f'{FOLDER_NAME}/dtbo_b.dump')
-            restore_partition_if_exists(dev, 'vbmeta_a', f'{FOLDER_NAME}/vbmeta_a.dump')
-            restore_partition_if_exists(dev, 'vbmeta_b', f'{FOLDER_NAME}/vbmeta_b.dump')
-            restore_partition_if_exists(dev, 'boot_a', f'{FOLDER_NAME}/boot_a.dump')
-            restore_partition_if_exists(dev, 'boot_b', f'{FOLDER_NAME}/boot_b.dump')
-            restore_partition_if_exists(dev, 'misc', f'{FOLDER_NAME}/misc.dump')
-            restore_partition_if_exists(dev, 'system_a', f'{FOLDER_NAME}/system_a.ext2')
-            restore_partition_if_exists(dev, 'system_b', f'{FOLDER_NAME}/system_b.ext2')
+            restore_partition(dev, 'fip_a', f'{FOLDER_NAME}/fip_a.dump')
+            restore_partition(dev, 'fip_b', f'{FOLDER_NAME}/fip_b.dump')
+            restore_partition(dev, 'logo', f'{FOLDER_NAME}/logo.dump')
+            restore_partition(dev, 'dtbo_a', f'{FOLDER_NAME}/dtbo_a.dump')
+            restore_partition(dev, 'dtbo_b', f'{FOLDER_NAME}/dtbo_b.dump')
+            restore_partition(dev, 'vbmeta_a', f'{FOLDER_NAME}/vbmeta_a.dump')
+            restore_partition(dev, 'vbmeta_b', f'{FOLDER_NAME}/vbmeta_b.dump')
+            restore_partition(dev, 'boot_a', f'{FOLDER_NAME}/boot_a.dump')
+            restore_partition(dev, 'boot_b', f'{FOLDER_NAME}/boot_b.dump')
+            restore_partition(dev, 'misc', f'{FOLDER_NAME}/misc.dump')
+            restore_partition(dev, 'system_a', f'{FOLDER_NAME}/system_a.ext2')
+            restore_partition(dev, 'system_b', f'{FOLDER_NAME}/system_b.ext2')
 
             # handle data and settings partitions last
             if not os.path.exists(f'{FOLDER_NAME}/data.ext4'):
@@ -432,7 +435,7 @@ Advanced:
 
             # always do bootloader last
             try:
-                dev.restore_partition('bootloader', f'{FOLDER_NAME}/bootloader.dump')
+                dev.restore_bootloader(f'{FOLDER_NAME}/bootloader.dump')
             except:
                 print("Flashing bootloader failed. If you encounter any issues, try flashing again.")
             print('Device restore complete. Replug your Car Thing to start using it.')
